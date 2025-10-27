@@ -1,7 +1,6 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
 import { getAuth, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-storage.js";
 import { getFirestore, collection, addDoc, getDocs, doc, deleteDoc, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-analytics.js";
 
@@ -20,8 +19,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const auth = getAuth(app);
-const storage = getStorage(app);
 const db = getFirestore(app);
+
+console.log('Firebase initialized - using Firestore for file storage');
 
 // State Management
 let currentUser = null;
@@ -138,45 +138,76 @@ async function handleFileUpload(event) {
 }
 
 async function uploadFile(file) {
-    return new Promise((resolve, reject) => {
-        const storageRef = ref(storage, `users/${currentUser.uid}/${file.name}`);
-        const uploadTask = uploadBytesResumable(storageRef, file);
-
-        uploadTask.on('state_changed',
-            (snapshot) => {
-                const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-                updateUploadProgress(progress, file.name);
-            },
-            (error) => {
-                hideUploadProgress();
-                reject(error);
-            },
-            async () => {
-                try {
-                    hideUploadProgress();
-                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                    
-                    // Try to save file metadata to Firestore (optional)
-                    try {
-                        await addDoc(collection(db, 'files'), {
-                            userId: currentUser.uid,
-                            fileName: file.name,
-                            fileSize: file.size,
-                            fileType: file.type,
-                            downloadURL: downloadURL,
-                            uploadedAt: serverTimestamp()
-                        });
-                    } catch (firestoreError) {
-                        console.log('Firestore save skipped (upload still successful)');
-                        // Continue even if Firestore fails
-                    }
-                    
-                    resolve();
-                } catch (error) {
-                    reject(error);
-                }
+    return new Promise(async (resolve, reject) => {
+        console.log('Starting upload for:', file.name, 'Size:', file.size);
+        
+        // Check file size (limit to 1MB for Firestore)
+        const maxSize = 1024 * 1024; // 1MB
+        if (file.size > maxSize) {
+            alert('File too large! Please choose a file smaller than 1MB.');
+            reject(new Error('File too large'));
+            return;
+        }
+        
+        try {
+            // Show progress
+            updateUploadProgress(10, file.name);
+            
+            // Convert file to base64
+            const base64 = await fileToBase64(file);
+            updateUploadProgress(50, file.name);
+            
+            // Try to save to Firestore, fallback to localStorage
+            try {
+                const docRef = await addDoc(collection(db, 'files'), {
+                    userId: currentUser.uid,
+                    fileName: file.name,
+                    fileSize: file.size,
+                    fileType: file.type,
+                    fileData: base64,
+                    uploadedAt: serverTimestamp()
+                });
+                console.log('File saved to Firestore successfully, ID:', docRef.id);
+            } catch (firestoreError) {
+                console.warn('Firestore unavailable, using localStorage:', firestoreError);
+                // Fallback to localStorage
+                const localFiles = JSON.parse(localStorage.getItem('userFiles') || '[]');
+                localFiles.push({
+                    id: Date.now().toString(),
+                    userId: currentUser.uid,
+                    fileName: file.name,
+                    fileSize: file.size,
+                    fileType: file.type,
+                    fileData: base64,
+                    uploadedAt: new Date().toISOString()
+                });
+                localStorage.setItem('userFiles', JSON.stringify(localFiles));
+                console.log('File saved to localStorage');
             }
-        );
+            
+            updateUploadProgress(100, file.name);
+            
+            setTimeout(() => {
+                hideUploadProgress();
+                resolve();
+            }, 500);
+            
+        } catch (error) {
+            console.error('Upload error:', error);
+            hideUploadProgress();
+            alert('Upload failed: ' + error.message);
+            reject(error);
+        }
+    });
+}
+
+// Helper function to convert file to base64
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = error => reject(error);
     });
 }
 
@@ -236,9 +267,15 @@ async function loadUserFiles() {
         renderFiles();
         clearTimeout(timeout); // Clear timeout if successful
     } catch (error) {
-        // Silently handle Firestore errors
-        console.log('Loading files without Firestore (using local storage only)');
-        files = [];
+        console.error('Error loading files from Firestore, trying localStorage:', error);
+        // Fallback to localStorage
+        try {
+            const localFiles = JSON.parse(localStorage.getItem('userFiles') || '[]');
+            files = localFiles.filter(file => file.userId === currentUser.uid);
+            console.log('Loaded files from localStorage:', files.length);
+        } catch (localError) {
+            files = [];
+        }
         renderFiles();
         clearTimeout(timeout);
     } finally {
@@ -313,7 +350,7 @@ function createFileCard(file) {
     
     div.innerHTML = `
         ${isImage 
-            ? `<img src="${file.downloadURL}" alt="${file.fileName}" onerror="this.style.display='none';">`
+            ? `<img src="${file.fileData}" alt="${file.fileName}" onerror="this.style.display='none';">`
             : `<div class="file-icon">${getFileIcon(fileType)}</div>`
         }
         <div class="file-info">
@@ -337,7 +374,7 @@ function createFileRow(file) {
     
     div.innerHTML = `
         ${isImage 
-            ? `<img src="${file.downloadURL}" alt="${file.fileName}" onerror="this.style.display='none';">`
+            ? `<img src="${file.fileData}" alt="${file.fileName}" onerror="this.style.display='none';">`
             : `<div class="file-icon">${getFileIcon(fileType)}</div>`
         }
         <div class="file-info">
@@ -411,11 +448,11 @@ function openPreview(file) {
     let content = '';
     
     if (isImage) {
-        content = `<img src="${file.downloadURL}" alt="${file.fileName}">`;
+        content = `<img src="${file.fileData}" alt="${file.fileName}">`;
     } else if (isVideo) {
-        content = `<video controls><source src="${file.downloadURL}" type="${file.fileType}"></video>`;
+        content = `<video controls><source src="${file.fileData}" type="${file.fileType}"></video>`;
     } else if (isPDF) {
-        content = `<iframe src="${file.downloadURL}"></iframe>`;
+        content = `<iframe src="${file.fileData}"></iframe>`;
     } else {
         const fileType = getFileType(file.fileType, file.fileName);
         content = `
@@ -446,7 +483,7 @@ function handleDelete() {
 
 function downloadFile(file) {
     const link = document.createElement('a');
-    link.href = file.downloadURL;
+    link.href = file.fileData; // Use base64 data instead of downloadURL
     link.download = file.fileName;
     document.body.appendChild(link);
     link.click();
@@ -456,25 +493,17 @@ function downloadFile(file) {
 async function deleteFile(fileId) {
     showLoading();
     try {
-        const fileDocRef = doc(db, 'files', fileId);
-        
-        // Get the file data first to get the downloadURL
-        const q = query(collection(db, 'files'), where('__name__', '==', fileId));
-        const snapshot = await getDocs(q);
-        
-        if (!snapshot.empty) {
-            const fileData = snapshot.docs[0].data();
-            
-            // Delete from Storage
-            const storageRef = ref(storage, fileData.downloadURL);
-            try {
-                await deleteObject(storageRef);
-            } catch (storageError) {
-                console.warn('Storage delete error (file may already be deleted):', storageError);
-            }
-            
-            // Delete from Firestore
+        // Try Firestore first
+        try {
+            const fileDocRef = doc(db, 'files', fileId);
             await deleteDoc(fileDocRef);
+            console.log('File deleted from Firestore successfully');
+        } catch (firestoreError) {
+            // Fallback to localStorage
+            const localFiles = JSON.parse(localStorage.getItem('userFiles') || '[]');
+            const updatedFiles = localFiles.filter(file => file.id !== fileId);
+            localStorage.setItem('userFiles', JSON.stringify(updatedFiles));
+            console.log('File deleted from localStorage');
         }
         
         hideLoading();
@@ -482,6 +511,7 @@ async function deleteFile(fileId) {
         previewModal.classList.add('hidden');
         currentPreviewFile = null;
     } catch (error) {
+        console.error('Delete error:', error);
         hideLoading();
         alert('Delete failed: ' + error.message);
     }

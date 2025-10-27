@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up - PhotoSys</title>
+    <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body>
+    <div class="auth-page">
+        <div class="auth-container">
+            <div class="auth-box">
+                <h1>PhotoSys</h1>
+                <p class="auth-subtitle">Create your account</p>
+                
+                <div id="errorMessage" class="error-message hidden"></div>
+                
+                <form id="registerForm" class="auth-form">
+                    <input type="text" id="signUpName" placeholder="Full Name" required>
+                    <input type="email" id="signUpEmail" placeholder="Email" required>
+                    <input type="password" id="signUpPassword" placeholder="Password (min. 6 characters)" required>
+                    <button type="submit" id="signUpBtn" class="btn btn-primary btn-block">Sign Up</button>
+                </form>
+
+                <p class="auth-switch">
+                    Already have an account? <a href="login.html">Sign In</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div id="loadingSpinner" class="loading-spinner hidden">
+        <div class="spinner"></div>
+    </div>
+
+    <script type="module" src="../js/auth.js"></script>
+</body>
+</html>
+
